@@ -1,0 +1,146 @@
+version: '3.7'
+
+services:
+  traefik:
+    image: traefik
+    container_name: traefik
+    restart: unless-stopped
+    command: --api --docker
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik.toml:/etc/traefik/traefik.toml
+
+  whoami:
+    image: containous/whoami
+    container_name: whoami
+    labels:
+      - "traefik.frontend.rule=Host:whoami.docker.localhost"
+
+  portainer:
+    image: portainer/portainer
+    container_name: portainer
+    restart: unless-stopped
+    expose:
+      - 9000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer_data:/data
+    labels:
+      - "traefik.frontend.rule=Host:portainer.docker.localhost"
+
+  netdata:
+    image: netdata/netdata
+    container_name: netdata
+    restart: unless-stopped
+    hostname: netdata.docker.localhost
+    expose:
+      - 19999
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "traefik.frontend.rule=Host:netdata.docker.localhost"
+
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    restart: unless-stopped
+    dns:
+      - 127.0.0.1
+      - 1.1.1.1
+    ports:
+      - '0.0.0.0:53:53/tcp'
+      - '0.0.0.0:53:53/udp'
+      - '0.0.0.0:67:67/udp'
+    expose:
+      - 80
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./etc-pihole/:/etc/pihole/
+      - ./etc-dnsmasqd/:/etc/dnsmasq.d/
+      - ./pihole.log:/var/log/pihole.log
+    environment:
+      ServerIP: 192.168.100.32
+      PROXY_LOCATION: pihole
+      VIRTUAL_HOST: pihole.docker.localhost
+      VIRTUAL_PORT: 80
+      TZ: Europe/Warsaw
+      WEBPASSWORD: Password
+      DNS1: 1.1.1.1
+      DNS2: 1.0.0.1
+    labels:
+       - "traefik.frontend.rule=HostRegexp:pihole.docker.localhost,{catchall:.*}"
+       - "traefik.frontend.priority=1"
+       - "traefik.backend=pihole"
+       - "traefik.port=80"
+
+  homeassistant:
+    image: homeassistant/home-assistant
+    container_name: homeassistant
+    restart: unless-stopped
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/ttyUSB1:/dev/ttyUSB1
+      - /dev/ttyACM0:/dev/ttyACM0
+    volumes:
+      - ./ha/homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      - ./ha/shared:/shared
+    expose:
+      - 8123
+    privileged: true
+    environment:
+      TZ: Europe/Warsaw
+    labels:
+      - "traefik.backend=homeassistant"
+      - "traefik.frontend.rule=Host:hass.docker.localhost"
+      - "traefik.port=8123"
+
+  nextcloud-redis:
+    image: redis:alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+
+  nextcloud-db:
+    image: mariadb:latest
+    container_name: nextcloud-db
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+    restart: unless-stopped
+    volumes:
+      - db:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=secret
+      - MYSQL_PASSWORD=mysql
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+
+  nextcloud-app:
+    image: nextcloud:latest
+    container_name: nextcloud-app
+    restart: unless-stopped
+    expose:
+      - 80
+    depends_on:
+      - nextcloud-db
+      - nextcloud-redis
+    volumes:
+      - nextcloud:/var/www/html
+    environment:
+      - REDIS_HOST=nextcloud-redis
+    labels:
+      - "traefik.backend=nextcloud"
+      - "traefik.frontend.rule=Host:nextcloud.docker.localhost"
+      - "traefik.port=80"
+
+volumes:
+  nextcloud:
+  db:
